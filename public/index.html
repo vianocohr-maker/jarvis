@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis — stand-in device</title>
+<style>
+  :root {
+    --ground: #121410; --panel: #1A1D17; --rule: #2B3128;
+    --ink: #E8EBE1; --soft: #838B7C; --accent: #86B08F; --amber: #D69433; --red: #D6725F;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 14px/1.55 ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+    display: grid; grid-template-rows: auto 1fr auto; min-height: 100vh;
+  }
+  header {
+    padding: 14px 18px; border-bottom: 1px solid var(--rule);
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--soft); flex: 0 0 auto; }
+  .dot.on { background: var(--accent); }
+  .dot.err { background: var(--red); }
+  h1 { font-size: 13px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; margin: 0; }
+  .phase {
+    margin-left: auto; font-size: 11px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--amber); min-width: 9ch; text-align: right;
+  }
+  main { display: grid; grid-template-columns: 1fr 320px; gap: 0; min-height: 0; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } #side { border-left: 0; border-top: 1px solid var(--rule); } }
+  #convo { padding: 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+  .turn { max-width: 62ch; }
+  .who { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--soft); margin-bottom: 3px; }
+  .me .who { color: var(--amber); }
+  .it .who { color: var(--accent); }
+  .txt { white-space: pre-wrap; }
+  .txt.partial { color: var(--soft); font-style: italic; }
+  #side { border-left: 1px solid var(--rule); padding: 18px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  video { width: 100%; border: 1px solid var(--rule); background: #000; aspect-ratio: 4/3; object-fit: cover; }
+  .meter { height: 4px; background: var(--rule); overflow: hidden; }
+  .meter i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width .06s linear; }
+  #log { flex: 1 1 auto; overflow-y: auto; font-size: 11.5px; color: var(--soft); display: flex; flex-direction: column-reverse; gap: 2px; min-height: 80px; }
+  #log b { color: var(--ink); font-weight: 500; }
+  footer { padding: 12px 18px; border-top: 1px solid var(--rule); display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; background: transparent; color: var(--ink); border: 1px solid var(--rule);
+    padding: 8px 16px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.talk.down { background: var(--accent); color: var(--ground); border-color: var(--accent); }
+  .hint { color: var(--soft); font-size: 11.5px; }
+  kbd { border: 1px solid var(--rule); padding: 1px 5px; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="link"></span>
+  <h1>Stand-in device</h1>
+  <span class="hint" id="mode">connecting…</span>
+  <span class="phase" id="phase">offline</span>
+</header>
+
+<main>
+  <div id="convo"></div>
+  <aside id="side">
+    <div>
+      <div class="who" style="margin-bottom:6px">Camera</div>
+      <video id="cam" autoplay muted playsinline></video>
+    </div>
+    <div>
+      <div class="who" style="margin-bottom:6px">Input level</div>
+      <div class="meter"><i id="level"></i></div>
+    </div>
+    <div class="who">Log</div>
+    <div id="log"></div>
+  </aside>
+</main>
+
+<footer>
+  <button class="talk" id="talk" disabled>Hold to talk</button>
+  <span class="hint">or hold <kbd>Space</kbd>. Audio streams only while talking or while it answers — never at idle.</span>
+</footer>
+
+<script type="module">
+// ─── The stand-in device ──────────────────────────────────────────────────────
+// Implements the wire protocol in src/bridge/protocol.ts. The iOS client in
+// Phase 7 replaces this file and nothing else: same messages, same PCM format,
+// same rule that the camera is pulled and never streamed.
+
+const TAG = { micPcm: 0x01, frameJpeg: 0x02, ttsAudio: 0x10 };
+const TARGET_RATE = 16000;
+
+const el = {
+  link: document.getElementById("link"),
+  mode: document.getElementById("mode"),
+  phase: document.getElementById("phase"),
+  convo: document.getElementById("convo"),
+  cam: document.getElementById("cam"),
+  level: document.getElementById("level"),
+  log: document.getElementById("log"),
+  talk: document.getElementById("talk"),
+};
+
+function log(msg, strong) {
+  const d = document.createElement("div");
+  d.innerHTML = strong ? `<b>${esc(msg)}</b>` : esc(msg);
+  el.log.prepend(d);
+  while (el.log.children.length > 120) el.log.lastChild.remove();
+}
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+// ─── state ───────────────────────────────────────────────────────────────────
+
+let ws = null;
+let cfg = { stt: "browser", tts: "client", wake: "push-to-talk" };
+let streaming = false;      // is mic PCM going over the wire
+let talking = false;        // is the user holding the key
+let serverSpeaking = false;
+let recog = null;           // browser SpeechRecognition, when STT is client-side
+let audioCtx = null, micNode = null, micStream = null;
+let currentUtterance = null, ttsChunks = [];
+let camStream = null;
+
+// ─── connect ─────────────────────────────────────────────────────────────────
+
+async function boot() {
+  try {
+    cfg = await (await fetch("/config.json")).json();
+  } catch { /* defaults */ }
+  el.mode.textContent = `stt: ${cfg.stt} · tts: ${cfg.tts} · wake: ${cfg.wake}`;
+  connect();
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}`);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = async () => {
+    el.link.className = "dot on";
+    setPhase("idle");
+    log("connected", true);
+    await openMedia();
+    send({
+      t: "hello",
+      label: `browser on ${navigator.platform || "this machine"}`,
+      capabilities: { audioIn: true, audioOut: true, frames: !!camStream, display: true },
+      battery: await batteryLevel(),
+      wake: cfg.wake,
+    });
+    el.talk.disabled = false;
+  };
+
+  ws.onclose = () => {
+    el.link.className = "dot err";
+    setPhase("offline");
+    el.talk.disabled = true;
+    log("disconnected — retrying in 2s");
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => log("socket error");
+
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") onControl(JSON.parse(ev.data));
+    else onBinary(new Uint8Array(ev.data));
+  };
+}
+
+function send(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+function sendBinary(tag, bytes) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const out = new Uint8Array(bytes.length + 1);
+  out[0] = tag;
+  out.set(bytes, 1);
+  ws.send(out);
+}
+
+// ─── media ───────────────────────────────────────────────────────────────────
+
+async function openMedia() {
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        // The glasses' open-ear speakers bleed into their mics; real hardware
+        // has AEC, and we want the same behaviour here or barge-in will fire
+        // on our own voice.
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    audioCtx = new AudioContext();
+    await installWorklet(audioCtx);
+    const src = audioCtx.createMediaStreamSource(micStream);
+    micNode = new AudioWorkletNode(audioCtx, "pcm-tap");
+    micNode.port.onmessage = (e) => onMicFrame(e.data);
+    src.connect(micNode);
+    log("microphone open");
+  } catch (err) {
+    log(`no microphone: ${err.message}`);
+  }
+
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+    el.cam.srcObject = camStream;
+    log("camera open");
+  } catch (err) {
+    log(`no camera: ${err.message}`);
+  }
+}
+
+/** Float32 tap at the context rate, posted to the main thread. */
+function installWorklet(ctx) {
+  const code = `
+    class PcmTap extends AudioWorkletProcessor {
+      process(inputs) {
+        const ch = inputs[0] && inputs[0][0];
+        if (ch) this.port.postMessage(new Float32Array(ch));
+        return true;
+      }
+    }
+    registerProcessor("pcm-tap", PcmTap);
+  `;
+  return ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: "text/javascript" })));
+}
+
+let resampleCarry = [];
+
+function onMicFrame(float32) {
+  // Level meter runs always; it is local and costs nothing.
+  let peak = 0;
+  for (let i = 0; i < float32.length; i++) peak = Math.max(peak, Math.abs(float32[i]));
+  el.level.style.width = `${Math.min(100, peak * 180).toFixed(0)}%`;
+
+  if (!streaming) return;
+  const pcm = toPcm16(downsample(float32, audioCtx.sampleRate, TARGET_RATE));
+  if (pcm.length) sendBinary(TAG.micPcm, pcm);
+}
+
+/** Averaging decimator — 48k to 16k is an integer 3:1, which is the common case. */
+function downsample(input, from, to) {
+  if (from === to) return input;
+  const ratio = from / to;
+  const outLen = Math.floor((input.length + resampleCarry.length) / ratio);
+  const src = resampleCarry.length ? Float32Array.from([...resampleCarry, ...input]) : input;
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(src.length, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    for (let j = start; j < end; j++) sum += src[j];
+    out[i] = end > start ? sum / (end - start) : 0;
+  }
+  resampleCarry = Array.from(src.subarray(Math.floor(outLen * ratio)));
+  return out;
+}
+
+function toPcm16(float32) {
+  const out = new Uint8Array(float32.length * 2);
+  const view = new DataView(out.buffer);
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]));
+    view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return out;
+}
+
+async function batteryLevel() {
+  try {
+    const b = await navigator.getBattery?.();
+    return b ? b.level : null;
+  } catch { return null; }
+}
+
+// ─── talking ─────────────────────────────────────────────────────────────────
+
+function startTalking(source) {
+  if (talking) return;
+  talking = true;
+  streaming = true;
+  el.talk.classList.add("down");
+  send({ t: "wake", at: Date.now(), source });
+  if (serverSpeaking) send({ t: "bargeIn", at: Date.now() });
+  if (cfg.stt === "browser") startRecognition();
+}
+
+function stopTalking() {
+  if (!talking) return;
+  talking = false;
+  el.talk.classList.remove("down");
+  // Keep streaming while the server answers, so barge-in has audio to hear.
+  streaming = serverSpeaking;
+  if (recog) { try { recog.stop(); } catch {} }
+  send({ t: "endOfSpeech", at: Date.now() });
+}
+
+el.talk.addEventListener("pointerdown", (e) => { e.preventDefault(); startTalking("push-to-talk"); });
+el.talk.addEventListener("pointerup", stopTalking);
+el.talk.addEventListener("pointerleave", stopTalking);
+
+addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !e.repeat && !e.target.matches("input,textarea")) {
+    e.preventDefault();
+    startTalking("push-to-talk");
+  }
+});
+addEventListener("keyup", (e) => {
+  if (e.code === "Space") { e.preventDefault(); stopTalking(); }
+});
+
+// ─── client-side recognition (STT_PROVIDER=browser) ───────────────────────────
+
+function startRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { log("no browser speech recognition — set STT_PROVIDER=deepgram"); return; }
+  if (recog) { try { recog.abort(); } catch {} }
+  recog = new SR();
+  recog.lang = "en-US";
+  recog.continuous = false;
+  recog.interimResults = true;
+  recog.onresult = (ev) => {
+    let text = "", final = false;
+    for (const r of ev.results) { text += r[0].transcript; if (r.isFinal) final = true; }
+    send({ t: "transcript", text: text.trim(), final, at: Date.now() });
+  };
+  recog.onerror = (ev) => { if (ev.error !== "aborted" && ev.error !== "no-speech") log(`recognition: ${ev.error}`); };
+  try { recog.start(); } catch {}
+}
+
+// ─── control messages in ─────────────────────────────────────────────────────
+
+function onControl(msg) {
+  switch (msg.t) {
+    case "ready":
+      log(`${msg.persona.name} ready`, true);
+      break;
+    case "state":
+      setPhase(msg.phase, msg.detail);
+      serverSpeaking = msg.phase === "speaking";
+      if (serverSpeaking) streaming = true;               // barge-in needs ears
+      else if (!talking && msg.phase === "idle") streaming = false;
+      break;
+    case "heard":
+      showTurn("me", msg.text, !msg.final);
+      break;
+    case "said":
+      showTurn("it", msg.text, false);
+      if (cfg.tts === "client") speakLocally(msg.text);
+      break;
+    case "captureFrame":
+      void grabFrame(msg.reason);
+      break;
+    case "speakBegin":
+      currentUtterance = { id: msg.utteranceId, mime: msg.mime };
+      ttsChunks = [];
+      break;
+    case "speakEnd":
+      void playBuffered();
+      break;
+    case "speakCancel":
+      stopPlayback();
+      break;
+    case "notice":
+      log(msg.text, msg.level !== "info");
+      break;
+    case "ping":
+      send({ t: "pong", at: Date.now() });
+      break;
+  }
+}
+
+function setPhase(phase, detail) {
+  el.phase.textContent = detail ? `${phase} · ${detail}` : phase;
+}
+
+// ─── camera: pull, never stream ──────────────────────────────────────────────
+
+async function grabFrame(reason) {
+  log(`frame requested: ${reason}`);
+  if (!camStream) { send({ t: "frameError", reason: "no camera" }); return; }
+  try {
+    const track = camStream.getVideoTracks()[0];
+    const bitmap = await new ImageCapture(track).grabFrame();
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.82));
+    sendBinary(TAG.frameJpeg, new Uint8Array(await blob.arrayBuffer()));
+    log(`sent ${bitmap.width}x${bitmap.height} frame`);
+  } catch (err) {
+    send({ t: "frameError", reason: err.message });
+  }
+}
+
+// ─── playback ────────────────────────────────────────────────────────────────
+
+let currentAudio = null;
+
+function onBinary(bytes) {
+  if (bytes[0] !== TAG.ttsAudio) return;
+  ttsChunks.push(bytes.subarray(1));
+}
+
+async function playBuffered() {
+  if (!currentUtterance || !ttsChunks.length) { send({ t: "playbackDone", interrupted: false }); return; }
+  const total = ttsChunks.reduce((n, c) => n + c.length, 0);
+  const joined = new Uint8Array(total);
+  let at = 0;
+  for (const c of ttsChunks) { joined.set(c, at); at += c.length; }
+  ttsChunks = [];
+
+  const url = URL.createObjectURL(new Blob([joined], { type: currentUtterance.mime }));
+  const audio = new Audio(url);
+  currentAudio = audio;
+  const done = (interrupted) => {
+    URL.revokeObjectURL(url);
+    if (currentAudio === audio) currentAudio = null;
+    send({ t: "playbackDone", interrupted });
+  };
+  audio.onended = () => done(false);
+  audio.onerror = () => done(true);
+  try { await audio.play(); } catch { done(true); }
+}
+
+function stopPlayback() {
+  if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; currentAudio = null; }
+  speechSynthesis.cancel();
+  ttsChunks = [];
+  send({ t: "playbackDone", interrupted: true });
+}
+
+/** TTS_PROVIDER=client — the device speaks for itself, nothing over the wire. */
+function speakLocally(text) {
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.05;
+  speechSynthesis.speak(u);
+}
+
+// ─── conversation view ───────────────────────────────────────────────────────
+
+let lastTurn = null;
+
+function showTurn(who, text, partial) {
+  const reuse = lastTurn && lastTurn.dataset.who === who && lastTurn.dataset.partial === "1";
+  if (!reuse) {
+    lastTurn = document.createElement("div");
+    lastTurn.className = `turn ${who}`;
+    lastTurn.dataset.who = who;
+    lastTurn.innerHTML = `<div class="who">${who === "me" ? "you" : "jarvis"}</div><div class="txt"></div>`;
+    el.convo.append(lastTurn);
+  }
+  lastTurn.dataset.partial = partial ? "1" : "0";
+  const txt = lastTurn.querySelector(".txt");
+  // Jarvis streams sentence by sentence; append rather than replace.
+  txt.textContent = who === "it" && !partial && reuse ? `${txt.textContent} ${text}`.trim() : text;
+  txt.className = `txt${partial ? " partial" : ""}`;
+  if (who === "it" && !partial) lastTurn.dataset.partial = "1"; // keep appending sentences
+  el.convo.scrollTop = el.convo.scrollHeight;
+}
+
+boot();
+</script>
+</body>
+</html>
