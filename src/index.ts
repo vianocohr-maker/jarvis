@@ -10,7 +10,7 @@ import { config, validate } from "./config.ts";
 import * as personaStore from "./persona.ts";
 import { Session } from "./session.ts";
 import { SpeakerId } from "./audio/speakerId.ts";
-import { Brain } from "./brain/llm.ts";
+import { makeBrain } from "./brain/index.ts";
 import { VoiceLoop } from "./brain/loop.ts";
 import { bridgeProvider, type BridgeDeviceHandle } from "./adapters/bridge/server.ts";
 import { deepgram } from "./stt/deepgram.ts";
@@ -41,16 +41,23 @@ async function main(): Promise<void> {
   for (const w of validate()) say(`note: ${w}`);
 
   const persona = personaStore.load(config.dataDir);
-  const brain = new Brain(config.anthropicKey, config.model);
+  const brain = makeBrain(config.brain);
   const stt = pickStt();
   const tts = pickTts();
   const speakerId = new SpeakerId(config.dataDir, "heuristic");
 
-  say(`persona ${persona.name} · ${persona.verbosity} · model ${config.model}`);
+  say(`persona ${persona.name} · ${persona.verbosity}`);
+  say(
+    `brain ${brain.name} ${brain.model} · ${brain.cost}` +
+      `${brain.vision ? " · can see" : " · TEXT ONLY, no vision"}`,
+  );
   say(
     `stt ${stt.name}${stt.clientSide ? " (on device)" : ""} · ` +
       `tts ${tts.name}${tts.clientSide ? " (on device)" : ""}`,
   );
+  if (!brain.vision) {
+    say(`note: ${brain.name} cannot see — "look at this" will say so rather than guess`);
+  }
   if (!speakerId.enrolled) {
     say("note: no voiceprint yet — it will answer any voice (onboarding B1)");
   }

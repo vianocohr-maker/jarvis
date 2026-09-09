@@ -3,16 +3,6 @@ import { fileURLToPath } from "node:url";
 /** Settings, read once at boot. Missing required values fail loudly here
  *  rather than three layers down mid-conversation. */
 
-function req(name: string): string {
-  const v = process.env[name];
-  if (!v || !v.trim()) {
-    throw new Error(
-      `${name} is not set. Copy .env.example to .env and fill it in, then run again.`,
-    );
-  }
-  return v.trim();
-}
-
 function opt(name: string, fallback = ""): string {
   return (process.env[name] ?? fallback).trim();
 }
@@ -20,10 +10,26 @@ function opt(name: string, fallback = ""): string {
 export type SttProvider = "deepgram" | "browser";
 export type TtsProvider = "client" | "sapi" | "elevenlabs";
 
+const brainProvider = opt("BRAIN", "gemini").toLowerCase();
+
+/** The key each backend wants, so .env can keep them side by side. */
+function brainKey(provider: string): string {
+  if (provider === "gemini") return opt("GEMINI_API_KEY");
+  if (provider === "claude" || provider === "anthropic") return opt("ANTHROPIC_API_KEY");
+  return opt("BRAIN_API_KEY");
+}
+
 export const config = {
   port: Number(opt("PORT", "8787")),
-  model: opt("MODEL", "claude-opus-5"),
-  anthropicKey: req("ANTHROPIC_API_KEY"),
+
+  brain: {
+    provider: brainProvider,
+    model: opt("BRAIN_MODEL"),
+    apiKey: brainKey(brainProvider),
+    baseUrl: opt("BRAIN_BASE_URL") || undefined,
+    /** Override when you know the loaded model can see. */
+    vision: opt("BRAIN_VISION") ? opt("BRAIN_VISION") === "true" : undefined,
+  },
 
   stt: {
     provider: opt("STT_PROVIDER", "browser") as SttProvider,
@@ -49,10 +55,14 @@ export const config = {
 export function validate(): string[] {
   const warnings: string[] = [];
   if (config.stt.provider === "deepgram" && !config.stt.deepgramKey) {
-    warnings.push("STT_PROVIDER=deepgram but DEEPGRAM_API_KEY is empty — falling back to browser recognition.");
+    warnings.push(
+      "STT_PROVIDER=deepgram but DEEPGRAM_API_KEY is empty — falling back to browser recognition.",
+    );
   }
   if (config.tts.provider === "elevenlabs" && !config.tts.elevenLabsKey) {
-    warnings.push("TTS_PROVIDER=elevenlabs but ELEVENLABS_API_KEY is empty — falling back to Windows SAPI.");
+    warnings.push(
+      "TTS_PROVIDER=elevenlabs but ELEVENLABS_API_KEY is empty — falling back to Windows SAPI.",
+    );
   }
   if (!config.picovoiceKey) {
     warnings.push("No PICOVOICE_ACCESS_KEY — wake word is off, hold SPACE to talk.");

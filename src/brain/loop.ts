@@ -28,7 +28,7 @@ import { SpeakerId } from "../audio/speakerId.ts";
 import { Turn } from "../telemetry.ts";
 import { systemPrompt, type Persona } from "../persona.ts";
 import type { Session } from "../session.ts";
-import type { Brain, Message } from "./llm.ts";
+import type { Brain, Message } from "./types.ts";
 import type { SttProvider, SttSession } from "../stt/types.ts";
 import type { TtsProvider } from "../tts/types.ts";
 
@@ -210,11 +210,21 @@ export class VoiceLoop {
     this.abort = new AbortController();
     const turn = this.turn ?? new Turn();
 
-    // Spend a frame only when the words ask for one.
+    // Spend a frame only when the words ask for one, and only when the brain
+    // could actually make use of it. A text-only model handed a picture just
+    // ignores it and describes something it never saw, which is worse than
+    // admitting it cannot see.
     let image: Frame | null = null;
     if (wantsEyes(said)) {
-      this.d.session.setPhase("thinking", "looking");
-      image = await this.d.session.tryCapture(said.slice(0, 60));
+      if (!this.d.brain.vision) {
+        this.d.session.notice(
+          "warn",
+          `The current brain (${this.d.brain.name}) cannot see images.`,
+        );
+      } else {
+        this.d.session.setPhase("thinking", "looking");
+        image = await this.d.session.tryCapture(said.slice(0, 60));
+      }
     }
 
     const queue = new SpeechQueue(

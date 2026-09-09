@@ -15,7 +15,9 @@ npm install
 cp .env.example .env
 ```
 
-Put an Anthropic API key in `.env` — that is the only one required. Then:
+Get a **free** Gemini key at <https://aistudio.google.com/apikey> — no credit card,
+takes a minute — and put it in `.env` as `GEMINI_API_KEY`. That is the only one
+required. Then:
 
 ```bash
 npm start
@@ -59,7 +61,7 @@ device (browser now, iPhone in Phase 7)
 bridge  ──▶  Device { audioIn, audioOut, camera }
   │            src/adapters/types.ts
   ▼
-VoiceLoop  ──▶  STT ──▶ Brain (Claude) ──▶ TTS
+VoiceLoop  ──▶  STT ──▶ Brain (any of 7 backends) ──▶ TTS
   src/brain/loop.ts
 ```
 
@@ -80,7 +82,28 @@ Two rules in that contract come from the hardware, not from taste:
 
 ## Configuration
 
-Everything lives in `.env`; see `.env.example` for the full list.
+Everything lives in `.env`; see `.env.example` for the full list. **The defaults
+are all free.**
+
+### The brain
+
+`BRAIN=` picks it. Which model answers is a line in `.env`, not a rewrite.
+
+| Value | Cost | Sees images | Notes |
+|-------|------|-------------|-------|
+| `gemini` | **free** | yes | 1,500/day, 15/min, no card. **Default.** Google may train on free-tier prompts |
+| `groq` | **free** | yes | Very fast. Llama 4 Scout is multimodal |
+| `lmstudio` | **free** | depends | No key, offline, private. Start the server under Developer first |
+| `ollama` | **free** | depends | Same, at :11434 |
+| `openrouter` | **free** | model-dependent | Look for models ending `:free` |
+| `cerebras` | **free** | no | Very fast |
+| `claude` | paid | yes | Best answers. Billed separately from a Claude subscription |
+
+Anything else OpenAI-shaped works too — set `BRAIN_BASE_URL`.
+
+A text-only brain does not pretend: `"look at this"` says it cannot see rather
+than describing something it never saw. If you load a vision model locally, set
+`BRAIN_VISION=true` to turn visual turns back on.
 
 **Speech in** — `STT_PROVIDER=browser` (free, uses the client's own recognition,
 noticeably worse in noise and absent on iOS) or `deepgram` (~$0.0043/min, much
@@ -104,7 +127,10 @@ src/
   bridge/protocol.ts       the wire format iOS will speak
   audio/                   VAD, ring buffer, voice identity
   stt/  tts/               providers behind one interface each
-  brain/llm.ts             streaming Claude, sentence-chunked, abortable
+  brain/types.ts           the brain interface
+  brain/index.ts           picks one from .env, fails early on a bad combination
+  brain/providers/         gemini (free), openaiCompat (lmstudio/groq/...), anthropic
+  brain/stream.ts          sentence splitting + SSE reading, shared
   brain/loop.ts            the state machine
   session.ts  persona.ts  telemetry.ts  config.ts
 public/index.html          the stand-in device
