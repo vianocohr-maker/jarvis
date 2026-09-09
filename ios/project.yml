@@ -31,6 +31,10 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+        # XcodeGen writes the generated Info.plist here from the properties
+        # below; compiling it as a resource as well produces a duplicate.
+        excludes:
+          - "Info.plist"
     info:
       path: Sources/Info.plist
       properties:

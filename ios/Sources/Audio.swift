@@ -22,8 +22,14 @@ final class AudioCapture {
     private var converter: AVAudioConverter?
     private var outputFormat: AVAudioFormat?
 
-    /// Called with 16 kHz mono s16le, roughly every 20 ms.
+    /// Called with 16 kHz mono s16le, roughly every 20 ms. This is what the
+    /// server receives.
     var onPcm: ((Data) -> Void)?
+
+    /// The same audio, untouched, in whatever format the hardware chose.
+    /// SFSpeechRecognizer wants this rather than the resampled bytes — it does
+    /// its own conversion and rejects a format it did not ask for.
+    var onBuffer: ((AVAudioPCMBuffer) -> Void)?
 
     private(set) var running = false
 
@@ -54,7 +60,9 @@ final class AudioCapture {
         // hardware gives, and the converter copes.
         input.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) {
             [weak self] buffer, _ in
-            self?.convert(buffer)
+            guard let self else { return }
+            self.onBuffer?(buffer)
+            self.convert(buffer)
         }
 
         engine.prepare()

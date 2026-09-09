@@ -48,7 +48,7 @@ enum ClientMessage {
                     "frames": frames,
                     "display": true,
                 ],
-                "battery": battery as Any,
+                "battery": battery ?? NSNull(),
                 // No wake word yet: the talk button is the trigger. Porcupine
                 // needs an access key and a binary dependency, and the first
                 // build wants neither.

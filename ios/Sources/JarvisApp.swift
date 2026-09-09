@@ -19,7 +19,6 @@ struct JarvisApp: App {
 /// barge-in and identity all live on the server, so a second client — the
 /// browser today, glasses later — behaves identically without reimplementing
 /// any of it.
-@MainActor
 final class SessionModel: ObservableObject {
     @Published var status: BridgeClient.Status = .offline
     @Published var phase = "idle"
@@ -58,7 +57,16 @@ final class SessionModel: ObservableObject {
     init() {
         bridge.onStatus = { [weak self] in self?.status = $0 }
         bridge.onMessage = { [weak self] in self?.handle($0) }
-        bridge.onAudio = { [weak self] in self?.playback.append($0) }
+        // Arrives on the URLSession queue, unlike the other callbacks.
+        bridge.onAudio = { [weak self] chunk in
+            DispatchQueue.main.async { self?.playback.append(chunk) }
+        }
+
+        // Without this the recogniser starts, hears nothing, and the app looks
+        // perfectly healthy while never transcribing a word.
+        capture.onBuffer = { [weak self] buffer in
+            self?.recognizer.append(buffer)
+        }
 
         capture.onPcm = { [weak self] pcm in
             // The server wants the audio even when the phone is transcribing:
