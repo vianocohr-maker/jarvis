@@ -13,6 +13,7 @@ import { SpeakerId } from "./audio/speakerId.ts";
 import { makeBrain } from "./brain/index.ts";
 import { VoiceLoop } from "./brain/loop.ts";
 import { bridgeProvider, type BridgeDeviceHandle } from "./adapters/bridge/server.ts";
+import { FolderFrameSource } from "./adapters/folder/frameSource.ts";
 import { deepgram } from "./stt/deepgram.ts";
 import { browserStt } from "./stt/browser.ts";
 import { clientTts, sapiTts, elevenLabsTts } from "./tts/providers.ts";
@@ -46,6 +47,14 @@ async function main(): Promise<void> {
   const tts = pickTts();
   const speakerId = new SpeakerId(config.dataDir, "heuristic");
 
+  const folderFrames =
+    config.frames.source === "folder" && config.frames.folder
+      ? new FolderFrameSource({
+          folder: config.frames.folder,
+          maxAgeMs: config.frames.maxAgeMinutes * 60_000,
+        })
+      : null;
+
   say(`persona ${persona.name} · ${persona.verbosity}`);
   say(
     `brain ${brain.name} ${brain.model} · ${brain.cost}` +
@@ -55,6 +64,12 @@ async function main(): Promise<void> {
     `stt ${stt.name}${stt.clientSide ? " (on device)" : ""} · ` +
       `tts ${tts.name}${tts.clientSide ? " (on device)" : ""}`,
   );
+  if (folderFrames) {
+    say(`frames from folder: ${folderFrames.describe()}`);
+    if (!folderFrames.available) {
+      say(`warn: that folder does not exist yet — "look at this" will say so`);
+    }
+  }
   if (!brain.vision) {
     say(`note: ${brain.name} cannot see — "look at this" will say so rather than guess`);
   }
@@ -85,6 +100,8 @@ async function main(): Promise<void> {
         say(`device gone — ${live.size} still connected`);
       },
     });
+
+    if (folderFrames) session.frameOverride = folderFrames;
 
     const loop = new VoiceLoop({
       session,
@@ -128,7 +145,7 @@ async function main(): Promise<void> {
     void device.ready.then(() => {
       say(`device connected — ${session.banner()}`);
       device.send({ t: "ready", persona: { name: persona.name, greeting: persona.greeting } });
-      if (!device.info.capabilities.frames) {
+      if (!folderFrames && !device.info.capabilities.frames) {
         session.notice("info", "No camera on this device — look-at-this questions will not work.");
       }
     });

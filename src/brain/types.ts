@@ -10,6 +10,8 @@
  *   report vision   so a visual turn can refuse early instead of lying
  */
 
+import type { ImageMime } from "../adapters/types.ts";
+
 export interface Message {
   role: "user" | "assistant";
   content: string;
@@ -19,7 +21,7 @@ export interface ThinkOptions {
   system: string;
   history: Message[];
   /** Optional image for a look-at-this turn. */
-  image?: { bytes: Buffer; mime: "image/jpeg" | "image/png" };
+  image?: { bytes: Buffer; mime: ImageMime };
   /** Fired once, on the very first token — the number that decides how it feels. */
   onFirstToken?: () => void;
   /** Fired per complete sentence, ready to speak. */

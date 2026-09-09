@@ -42,6 +42,16 @@ export const config = {
     elevenLabsVoice: opt("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
   },
 
+  /** Where "look at this" gets its picture from.
+   *  "device"  the connected client's camera (webcam today)
+   *  "folder"  newest photo in a watched folder — glasses photos arriving via
+   *            Meta AI auto-import and iCloud, needing no app at all */
+  frames: {
+    source: opt("FRAME_SOURCE", "device") as "device" | "folder",
+    folder: opt("FRAME_FOLDER"),
+    maxAgeMinutes: Number(opt("FRAME_MAX_AGE_MIN", "15")),
+  },
+
   /** Handed to the client; the wake word runs there so audio does not stream
    *  until it fires. Blank means push-to-talk. */
   picovoiceKey: opt("PICOVOICE_ACCESS_KEY"),

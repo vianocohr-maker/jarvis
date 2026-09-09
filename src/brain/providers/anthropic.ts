@@ -23,6 +23,16 @@ export function anthropic(apiKey: string, model = "claude-opus-5"): Brain {
     async think(prompt: string, opts: ThinkOptions): Promise<string> {
       const content: Anthropic.ContentBlockParam[] = [];
       if (opts.image) {
+        // Claude reads jpeg, png, webp and gif — but not HEIC, which is what an
+        // iPhone produces by default. Say so plainly; silently dropping the
+        // image would leave it describing a photo it never received.
+        if (opts.image.mime === "image/heic" || opts.image.mime === "image/heif") {
+          throw new Error(
+            "That photo is HEIC, which Claude cannot read. Either switch to " +
+              "BRAIN=gemini, which reads HEIC natively, or set the iPhone camera " +
+              "to Most Compatible so it saves JPEG (Settings, Camera, Formats).",
+          );
+        }
         content.push({
           type: "image",
           source: {

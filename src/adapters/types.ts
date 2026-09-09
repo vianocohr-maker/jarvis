@@ -62,10 +62,19 @@ export interface AudioChunk {
   capturedAt: number;
 }
 
+/** Image types the vision models accept. HEIC is here because iPhones produce
+ *  it by default and Gemini reads it natively. */
+export type ImageMime =
+  | "image/jpeg"
+  | "image/png"
+  | "image/webp"
+  | "image/heic"
+  | "image/heif";
+
 /** A still image pulled from the device camera. */
 export interface Frame {
   bytes: Buffer;
-  mime: "image/jpeg" | "image/png";
+  mime: ImageMime;
   width: number;
   height: number;
   capturedAt: number;

@@ -6,7 +6,7 @@
  * that silently stops working is worse than one that admits it is broken.
  */
 
-import type { Device } from "./adapters/types.ts";
+import type { Device, FrameSource } from "./adapters/types.ts";
 
 export type Phase = "idle" | "listening" | "thinking" | "speaking";
 
@@ -21,6 +21,9 @@ const LOW_BATTERY = 0.15;
 
 export class Session {
   readonly device: Device;
+  /** When set, frames come from here instead of the device camera — used for
+   *  the glasses-photo folder, which the device knows nothing about. */
+  frameOverride: FrameSource | null = null;
   readonly startedAt = Date.now();
   private _phase: Phase = "idle";
   private events: SessionEvents;
@@ -68,13 +71,18 @@ export class Session {
    * Returns null and speaks the reason rather than throwing into the loop.
    */
   async tryCapture(reason: string, timeoutMs = 4000) {
-    if (!this.device.info.capabilities.frames || !this.device.camera.available) {
-      this.notice("warn", "No camera on this device.");
+    const source = this.frameOverride ?? this.device.camera;
+    const usable = this.frameOverride
+      ? this.frameOverride.available
+      : this.device.info.capabilities.frames && this.device.camera.available;
+
+    if (!usable) {
+      this.notice("warn", "No camera available.");
       return null;
     }
     try {
       return await Promise.race([
-        this.device.camera.capture(reason),
+        source.capture(reason),
         new Promise<never>((_, rej) =>
           setTimeout(() => rej(new Error("camera timed out")), timeoutMs),
         ),
