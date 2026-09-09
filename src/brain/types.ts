@@ -17,15 +17,38 @@ export interface Message {
   content: string;
 }
 
+/** What a tool looks like to a model. Mirrors the registry, minus the code. */
+export interface ToolSpec {
+  name: string;
+  description: string;
+  params: Record<
+    string,
+    { type: "string" | "number" | "boolean"; description: string; enum?: string[]; required?: boolean }
+  >;
+}
+
+/**
+ * What the caller does with a tool the model asked for. Returning `halt` stops
+ * generation — used when an action needs a spoken yes first, so the model does
+ * not carry on narrating as though the thing already happened.
+ */
+export type ToolOutcome = { summary: string } | { halt: string };
+
 export interface ThinkOptions {
   system: string;
   history: Message[];
   /** Optional image for a look-at-this turn. */
   image?: { bytes: Buffer; mime: ImageMime };
+  /** Tools the model may call this turn. Omit for a plain conversational turn. */
+  tools?: ToolSpec[];
+  /** Runs a tool the model asked for and returns what to tell it. */
+  runTool?: (name: string, args: Record<string, unknown>) => Promise<ToolOutcome>;
   /** Fired once, on the very first token — the number that decides how it feels. */
   onFirstToken?: () => void;
   /** Fired per complete sentence, ready to speak. */
   onSentence: (sentence: string) => void;
+  /** Fired when a tool is about to run, so the loop can say "checking…". */
+  onToolStart?: (name: string) => void;
   signal?: AbortSignal;
 }
 

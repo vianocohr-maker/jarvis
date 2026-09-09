@@ -52,6 +52,19 @@ export const config = {
     maxAgeMinutes: Number(opt("FRAME_MAX_AGE_MIN", "15")),
   },
 
+  /** Item 30/36. "browser" gives it a real Chrome; "off" leaves it able only
+   *  to talk. Anything that changes something still needs a spoken yes. */
+  tools: {
+    enabled: opt("TOOLS", "off") !== "off",
+    headed: opt("BROWSER_HEADED", "true") !== "false",
+    profileDir: opt("BROWSER_PROFILE_DIR"),
+    /** Empty means anywhere. Naming hosts is the safer way to start. */
+    allowedHosts: opt("BROWSER_ALLOWED_HOSTS")
+      .split(",")
+      .map((h) => h.trim().toLowerCase())
+      .filter(Boolean),
+  },
+
   /** Handed to the client; the wake word runs there so audio does not stream
    *  until it fires. Blank means push-to-talk. */
   picovoiceKey: opt("PICOVOICE_ACCESS_KEY"),

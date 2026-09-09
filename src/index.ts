@@ -14,6 +14,8 @@ import { makeBrain } from "./brain/index.ts";
 import { VoiceLoop } from "./brain/loop.ts";
 import { bridgeProvider, type BridgeDeviceHandle } from "./adapters/bridge/server.ts";
 import { FolderFrameSource } from "./adapters/folder/frameSource.ts";
+import { ToolRegistry } from "./tools/registry.ts";
+import { browserTools, configureBrowser, closeBrowser, defaultProfileDir } from "./tools/browser.ts";
 import { deepgram } from "./stt/deepgram.ts";
 import { browserStt } from "./stt/browser.ts";
 import { clientTts, sapiTts, elevenLabsTts } from "./tts/providers.ts";
@@ -55,6 +57,20 @@ async function main(): Promise<void> {
         })
       : null;
 
+  let tools: ToolRegistry | undefined;
+  if (config.tools.enabled) {
+    const profileDir = config.tools.profileDir || defaultProfileDir(config.dataDir);
+    configureBrowser({
+      profileDir,
+      headed: config.tools.headed,
+      allowedHosts: config.tools.allowedHosts,
+    });
+    tools = new ToolRegistry(browserTools, {
+      onRan: (name, _args, ms) => say(`  ran ${name} (${ms}ms)`),
+      onRefused: (name, reason) => say(`  REFUSED ${name}: ${reason}`),
+    });
+  }
+
   say(`persona ${persona.name} · ${persona.verbosity}`);
   say(
     `brain ${brain.name} ${brain.model} · ${brain.cost}` +
@@ -72,6 +88,18 @@ async function main(): Promise<void> {
   }
   if (!brain.vision) {
     say(`note: ${brain.name} cannot see — "look at this" will say so rather than guess`);
+  }
+  if (tools) {
+    const confirmable = tools.list().filter((t) => t.risk === "confirm").length;
+    const refused = tools.list().filter((t) => t.risk === "never").length;
+    say(
+      `tools ${tools.size} loaded · ${confirmable} need a spoken yes · ${refused} always refused`,
+    );
+    say(
+      config.tools.allowedHosts.length
+        ? `  browser limited to: ${config.tools.allowedHosts.join(", ")}`
+        : `  browser may visit ANY site — set BROWSER_ALLOWED_HOSTS to restrict it`,
+    );
   }
   if (!speakerId.enrolled) {
     say("note: no voiceprint yet — it will answer any voice (onboarding B1)");
@@ -111,6 +139,7 @@ async function main(): Promise<void> {
       tts,
       persona,
       speakerId,
+      tools,
       followUpWindowMs: config.followUpWindowMs,
       // With client-side TTS the `said` message is what makes the device speak,
       // so there is nothing to await here. A server-rendered voice goes through
@@ -156,6 +185,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     say("shutting down");
     for (const l of live) await l.close();
+    await closeBrowser();
     await provider.close();
     process.exit(0);
   };
