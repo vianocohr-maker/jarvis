@@ -1,0 +1,53 @@
+# XcodeGen builds the .xcodeproj from this file.
+#
+# Why generate rather than commit a .xcodeproj: a .pbxproj is a large generated
+# file that is painful to write by hand and merges badly. Since nobody on this
+# project has a Mac, it has to be produced by CI from something readable — this.
+#
+#   brew install xcodegen && xcodegen generate
+
+name: Jarvis
+options:
+  bundleIdPrefix: local.jarvis
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    # Unsigned on CI. Sideloadly re-signs with a free Apple ID afterwards, so
+    # the build machine never needs a certificate or a paid account.
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_IDENTITY: ""
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+
+targets:
+  Jarvis:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Jarvis
+        CFBundleShortVersionString: "0.1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        # Both strings are required or iOS kills the app on first use.
+        NSMicrophoneUsageDescription: Jarvis listens when you hold the talk button.
+        NSSpeechRecognitionUsageDescription: Speech is transcribed on this device and only the text is sent.
+        # Lets it keep the socket and audio alive with the screen off, which is
+        # the whole point of a phone in your pocket.
+        UIBackgroundModes:
+          - audio
+        # The bridge is plain ws:// on a home network, not https.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: Jarvis connects to the bridge running on your computer.

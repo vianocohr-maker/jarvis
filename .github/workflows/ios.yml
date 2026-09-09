@@ -1,0 +1,93 @@
+# Builds the iOS client on GitHub's macOS runners and uploads an unsigned IPA.
+#
+# The point of this file: nobody on this project owns a Mac. macOS runners are
+# free and unlimited on PUBLIC repositories — on a private one they bill at 10x,
+# so the free tier's 2,000 minutes becomes about 200 macOS minutes a month.
+# Check that before making the repo private.
+#
+# The build is UNSIGNED on purpose. Signing on CI needs a certificate, which
+# needs the $99 Apple Developer Program. Instead the IPA comes out unsigned and
+# Sideloadly re-signs it on Windows with a free Apple ID at install time.
+
+name: iOS
+
+on:
+  push:
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  # So you can build without pushing anything.
+  workflow_dispatch:
+
+jobs:
+  build:
+    # macos-14 is Apple silicon. macos-latest drifts; pinning keeps a build that
+    # worked last month working this month.
+    runs-on: macos-14
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      # Compile for a real device. No signing, so no certificates are needed —
+      # but it must be iphoneos, not the simulator, or the binary will not run
+      # on a phone.
+      - name: Build
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Jarvis.xcodeproj \
+            -scheme Jarvis \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      # An .ipa is a zip with the .app inside a folder called Payload. Doing it
+      # by hand avoids `xcodebuild -exportArchive`, which insists on a signing
+      # identity we deliberately do not have.
+      - name: Package the IPA
+        working-directory: ios
+        run: |
+          APP_PATH="build/Build/Products/Release-iphoneos/Jarvis.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Build produced no app at $APP_PATH"
+            ls -R build/Build/Products || true
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry Jarvis-unsigned.ipa Payload
+          rm -rf Payload
+          ls -lh Jarvis-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jarvis-unsigned-ipa
+          path: ios/Jarvis-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: How to install this
+        run: |
+          echo "Download the artifact, unzip it, then on Windows:"
+          echo "  1. Install Sideloadly  https://sideloadly.io"
+          echo "  2. Plug the iPhone in, drag Jarvis-unsigned.ipa onto Sideloadly"
+          echo "  3. Enter your free Apple ID; it signs and installs"
+          echo "  4. On the phone: Settings > General > VPN & Device Management > Trust"
+          echo "The app expires after 7 days on a free Apple ID; re-run Sideloadly to renew."
