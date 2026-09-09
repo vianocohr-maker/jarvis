@@ -198,7 +198,9 @@ final class SessionModel: ObservableObject {
             _ = reason
             bridge.send(.frameError(reason: "This client has no camera yet."))
 
-        case .ping, .pong, .unknown:
+        // ping is answered inside BridgeClient and never reaches here; pong is
+        // something we send, not something we receive.
+        case .ping, .unknown:
             break
         }
     }
