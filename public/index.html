@@ -52,6 +52,16 @@
   button.talk.down { background: var(--accent); color: var(--ground); border-color: var(--accent); }
   .hint { color: var(--soft); font-size: 11.5px; }
   kbd { border: 1px solid var(--rule); padding: 1px 5px; font-size: 11px; }
+  select {
+    font: inherit; font-size: 12px; width: 100%; background: var(--ground);
+    color: var(--ink); border: 1px solid var(--rule); padding: 6px 8px;
+  }
+  select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pick { display: flex; flex-direction: column; gap: 5px; }
+  .glasses {
+    font-size: 11.5px; color: var(--accent); border-left: 2px solid var(--accent);
+    padding-left: 8px; line-height: 1.4;
+  }
 </style>
 </head>
 <body>
@@ -66,8 +76,14 @@
 <main>
   <div id="convo"></div>
   <aside id="side">
-    <div>
-      <div class="who" style="margin-bottom:6px">Camera</div>
+    <div class="pick">
+      <div class="who">Microphone &amp; speaker</div>
+      <select id="micPick" aria-label="Microphone"><option>waiting for permission…</option></select>
+      <div class="glasses" id="glassesHint" hidden></div>
+    </div>
+    <div class="pick">
+      <div class="who">Camera</div>
+      <select id="camPick" aria-label="Camera"><option>waiting for permission…</option></select>
       <video id="cam" autoplay muted playsinline></video>
     </div>
     <div>
@@ -102,6 +118,18 @@ const el = {
   level: document.getElementById("level"),
   log: document.getElementById("log"),
   talk: document.getElementById("talk"),
+  micPick: document.getElementById("micPick"),
+  camPick: document.getElementById("camPick"),
+  glassesHint: document.getElementById("glassesHint"),
+};
+
+/** Names Meta's eyewear shows up under once paired as a Bluetooth headset. */
+const GLASSES_NAMES = /ray-?ban|meta view|oakley|hstn|vanguard|headliner|wayfarer|skyler/i;
+
+/** Remember the chosen devices per browser — a small local convenience only. */
+const remembered = {
+  get(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private window */ } },
 };
 
 function log(msg, strong) {
@@ -183,37 +211,120 @@ function sendBinary(tag, bytes) {
 // ─── media ───────────────────────────────────────────────────────────────────
 
 async function openMedia() {
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        // The glasses' open-ear speakers bleed into their mics; real hardware
-        // has AEC, and we want the same behaviour here or barge-in will fire
-        // on our own voice.
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    audioCtx = new AudioContext();
-    await installWorklet(audioCtx);
-    const src = audioCtx.createMediaStreamSource(micStream);
-    micNode = new AudioWorkletNode(audioCtx, "pcm-tap");
-    micNode.port.onmessage = (e) => onMicFrame(e.data);
-    src.connect(micNode);
-    log("microphone open");
-  } catch (err) {
-    log(`no microphone: ${err.message}`);
-  }
+  await openMic(remembered.get("micId"));
+  await openCam(remembered.get("camId"));
+  await listDevices();
+}
+
+async function openMic(deviceId) {
+  // Tear down any previous graph, or two mics end up feeding the socket.
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (audioCtx) { try { await audioCtx.close(); } catch {} audioCtx = null; }
+  resampleCarry = [];
+
+  const audio = {
+    channelCount: 1,
+    // The glasses' open-ear speakers bleed straight into their own mics. Real
+    // hardware has echo cancellation; we ask for it here too or barge-in will
+    // trigger on our own voice and the loop will fight itself.
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  };
+  if (deviceId) audio.deviceId = { exact: deviceId };
 
   try {
-    camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
-    el.cam.srcObject = camStream;
-    log("camera open");
+    micStream = await navigator.mediaDevices.getUserMedia({ audio });
   } catch (err) {
+    if (deviceId) {
+      log(`chosen microphone unavailable, falling back to default`);
+      remembered.set("micId", "");
+      return openMic("");
+    }
+    log(`no microphone: ${err.message}`);
+    return;
+  }
+
+  audioCtx = new AudioContext();
+  await installWorklet(audioCtx);
+  const src = audioCtx.createMediaStreamSource(micStream);
+  micNode = new AudioWorkletNode(audioCtx, "pcm-tap");
+  micNode.port.onmessage = (e) => onMicFrame(e.data);
+  src.connect(micNode);
+
+  const label = micStream.getAudioTracks()[0]?.label || "default";
+  log(`microphone: ${label}`, GLASSES_NAMES.test(label));
+  showGlassesHint(label);
+}
+
+async function openCam(deviceId) {
+  if (camStream) camStream.getTracks().forEach((t) => t.stop());
+  const video = { width: 1280, height: 720 };
+  if (deviceId) video.deviceId = { exact: deviceId };
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video });
+    el.cam.srcObject = camStream;
+    log(`camera: ${camStream.getVideoTracks()[0]?.label || "default"}`);
+  } catch (err) {
+    camStream = null;
     log(`no camera: ${err.message}`);
   }
 }
+
+/** Labels are only readable after permission is granted, so this runs last. */
+async function listDevices() {
+  let devices = [];
+  try { devices = await navigator.mediaDevices.enumerateDevices(); } catch { return; }
+
+  fill(el.micPick, devices.filter((d) => d.kind === "audioinput"), remembered.get("micId"), "Default microphone");
+  fill(el.camPick, devices.filter((d) => d.kind === "videoinput"), remembered.get("camId"), "Default camera");
+
+  const glasses = devices.find((d) => d.kind === "audioinput" && GLASSES_NAMES.test(d.label));
+  if (glasses && remembered.get("micId") !== glasses.deviceId) {
+    log(`glasses detected: ${glasses.label} — pick it in the microphone list`, true);
+  }
+}
+
+function fill(select, devices, chosen, defaultLabel) {
+  select.innerHTML = "";
+  const def = document.createElement("option");
+  def.value = "";
+  def.textContent = defaultLabel;
+  select.append(def);
+  for (const d of devices) {
+    const o = document.createElement("option");
+    o.value = d.deviceId;
+    o.textContent = d.label || `${d.kind} ${d.deviceId.slice(0, 6)}`;
+    if (GLASSES_NAMES.test(o.textContent)) o.textContent = `👓 ${o.textContent}`;
+    select.append(o);
+  }
+  select.value = devices.some((d) => d.deviceId === chosen) ? chosen : "";
+}
+
+function showGlassesHint(label) {
+  if (GLASSES_NAMES.test(label)) {
+    el.glassesHint.hidden = false;
+    el.glassesHint.textContent =
+      "Glasses in use for voice. The camera is still the laptop's — the glasses' " +
+      "camera needs the iOS app (Phase 7).";
+  } else {
+    el.glassesHint.hidden = true;
+  }
+}
+
+el.micPick.addEventListener("change", async () => {
+  remembered.set("micId", el.micPick.value);
+  await openMic(el.micPick.value);
+});
+
+el.camPick.addEventListener("change", async () => {
+  remembered.set("camId", el.camPick.value);
+  await openCam(el.camPick.value);
+  send({ t: "battery", level: 1 }); // nudge; capabilities may have changed
+});
+
+// Pairing the glasses mid-session should just show up in the list.
+navigator.mediaDevices?.addEventListener?.("devicechange", () => void listDevices());
 
 /** Float32 tap at the context rate, posted to the main thread. */
 function installWorklet(ctx) {
