@@ -19,16 +19,26 @@ on:
 
 jobs:
   build:
-    # macos-14 is Apple silicon. macos-latest drifts; pinning keeps a build that
-    # worked last month working this month.
-    runs-on: macos-14
+    # macos-15 for Xcode 16. XcodeGen (current Homebrew build) emits project
+    # format 77, which Xcode 15.4 on macos-14 refuses to open:
+    #   "the project is in a future Xcode project file format (77)"
+    # Pinned rather than macos-latest so a runner-image change cannot silently
+    # break a build that worked last month.
+    runs-on: macos-15
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show toolchain
+      # The image ships several Xcodes and the default is not always the newest.
+      # Selecting explicitly means the generated project format and the compiler
+      # that reads it cannot drift apart.
+      - name: Select the newest Xcode
         run: |
+          ls /Applications | grep -i '^Xcode' || true
+          latest=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "using $latest"
+          sudo xcode-select -s "$latest/Contents/Developer"
           xcodebuild -version
           swift --version
 
